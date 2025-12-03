@@ -20,10 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 COPY instancer ./instancer/
-COPY templates ./templates/
 
 ENV PATH="/app/.venv/bin:$PATH"
-
 ENTRYPOINT []
-
 CMD ["python3", "-m", "instancer"]
