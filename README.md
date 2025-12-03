@@ -153,38 +153,7 @@ Since we allow one instance per team, we need to authorize people and tag instan
 debugging purposes there's a `local` auth provider, that isn't doing any authorization and just returns that static id 
 `local`, so you can run the thing locally.
 
-For production, we only have a rctf auth provider because that is exactly the platform we used, but I believe adding 
-other platforms should be pretty straightforward.
-
-For the rctf authorization to work, you need to mount this CF worker at `/auth*` (shamelessly stolen from klodd):
-```js
-const renderAuthPage = uri => `<!doctype html>
-<script>
-const token = localStorage.token
-const state = new URL(location).searchParams.get('state')
-if (state && token) {
-  location = \`${uri}?state=\${encodeURIComponent(state)}&token=\${encodeURIComponent(token)}\`
-} else {
-  location = '/login'
-}
-</script>
-`
-
-const redirectUris = ['https://[instancer_domain]/auth']
-
-const handle = req => {
-  const url = new URL(req.url)
-  const redirectUri = url.searchParams.get('redirect_uri')
-  if (!redirectUris.includes(redirectUri)) {
-    return new Response(null, { status: 400 })
-  }
-  return new Response(renderAuthPage(redirectUri), {
-    headers: { 'content-type': 'text/html' }
-  })
-}
-
-addEventListener('fetch', evt => evt.respondWith(handle(evt.request)))
-```
+For production, we only have a rctf auth provider because that is exactly the platform we used.
 
 ## Docker configuration
 

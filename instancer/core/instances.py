@@ -1,41 +1,21 @@
 import asyncio
 import http
 import uuid
-from asyncio import sleep
 from enum import StrEnum
 from functools import cache
 
 from aiodocker import Docker, DockerError
 from aiodocker.containers import DockerContainer
 from fastapi import HTTPException
-from pydantic import BaseModel
 
 from instancer.core.cache import instance_lock
-from instancer.core.challenges import Challenge, Container, ExposeKind, expose_kind_to_port, get_challenge
 from instancer.core.config import config
+from instancer.protocol import types as protocol
 from instancer.util.logger import logger
-from instancer.util.time import timestamp
+from instancer.util.time import timestamp_milliseconds
 
 
 NOT_ACQUIRED_ERROR = HTTPException(status_code=400, detail='Another instance operation is in progress.')
-
-
-class InstanceStatus(StrEnum):
-    STOPPED = 'stopped'
-    RUNNING = 'running'
-    STARTING = 'starting'
-
-
-class Instance(BaseModel):
-    class Endpoint(BaseModel):
-        kind: ExposeKind
-        host: str
-        port: int
-
-    status: InstanceStatus
-    timeout: int
-    endpoints: list[Endpoint] | None = None
-    remaining_time: int | None = None
 
 
 class ContainerLabels(StrEnum):
@@ -46,6 +26,7 @@ class ContainerLabels(StrEnum):
     INSTANCE_ID = 'io.es3n1n.instancer.instance_id'
     STARTED_AT = 'io.es3n1n.instancer.started_at'
     EXPIRES_AT = 'io.es3n1n.instancer.expires_at'
+    EXPOSED_KINDS = 'io.es3n1n.instancer.exposed_kinds'
 
 
 @cache
@@ -62,6 +43,33 @@ def _get_search_filters(challenge_name: str, team_id: str) -> dict[str, dict | l
             f'{ContainerLabels.TEAM_ID}={team_id}',
         ]
     }
+
+
+def _get_endpoints_for(expose_kinds: str, host: str) -> list[protocol.RCTFInstanceDetails.Endpoint]:
+    result = []
+
+    for kind_s in expose_kinds.split(','):
+        kind = protocol.ExposeKind(kind_s)
+        if kind == protocol.ExposeKind.TCP:
+            # We expose only TCP_SSL, due to SNI host matching for routing
+            kind = protocol.ExposeKind.TCP_SSL
+
+        port = 1337
+        match kind:
+            case protocol.ExposeKind.HTTP:
+                port = 80
+            case protocol.ExposeKind.HTTPS:
+                port = 443
+
+        result.append(
+            protocol.RCTFInstanceDetails.Endpoint(
+                kind=kind,
+                host=host,
+                port=port,
+            )
+        )
+
+    return result
 
 
 async def get_containers(
@@ -126,41 +134,40 @@ async def _ensure_network(name: str, *, internal: bool, expires_at: int) -> None
 
 def _add_expose_labels(
     host: str,
-    labels: dict[str, str],
-    challenge: Challenge,
-    container: Container,
-    team_id: str,
+    labels: dict[str, str | list[str]],
+    form: protocol.RCTFCreateInstanceForm,
+    pod: protocol.RCTFCreateInstanceForm.Pod,
     instance_id: str,
 ) -> None:
     # All endpoints share the same hostname, so no need to check for container name here
-    has_http_expose = any(e.kind == ExposeKind.HTTP for e in challenge.expose)
+    has_http_expose = any(e.kind == protocol.ExposeKind.HTTP for e in form.expose)
 
-    for i, expose in enumerate(challenge.expose):
-        if expose.container_name != container.name:
+    for i, expose in enumerate(form.expose):
+        if expose.pod_name != pod.name:
             continue
 
-        router_name = f'{config.PREFIX}-{challenge.name}-{team_id}-{instance_id}-{container.name}-{i}'
+        router_name = f'{config.PREFIX}-{form.challenge_integration_id}-{form.team_id}-{instance_id}-{pod.name}-{i}'
 
         match expose.kind:
-            case ExposeKind.TCP:
+            case protocol.ExposeKind.TCP | protocol.ExposeKind.TCP_SSL:
                 labels[f'traefik.tcp.routers.{router_name}.rule'] = f'HostSNI(`{host}`)'
                 labels[f'traefik.tcp.routers.{router_name}.entrypoints'] = config.TRAEFIK_TCP_ENTRYPOINT
                 labels[f'traefik.tcp.routers.{router_name}.service'] = router_name
                 labels[f'traefik.tcp.routers.{router_name}.tls.passthrough'] = 'true'
-                labels[f'traefik.tcp.services.{router_name}.loadbalancer.server.port'] = str(expose.container_port)
+                labels[f'traefik.tcp.services.{router_name}.loadbalancer.server.port'] = str(expose.pod_port)
 
-            case ExposeKind.HTTP:
+            case protocol.ExposeKind.HTTP:
                 labels[f'traefik.http.routers.{router_name}.rule'] = f'Host(`{host}`)'
                 labels[f'traefik.http.routers.{router_name}.entrypoints'] = config.TRAEFIK_HTTP_ENTRYPOINT
                 labels[f'traefik.http.routers.{router_name}.service'] = router_name
-                labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = str(expose.container_port)
+                labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = str(expose.pod_port)
 
-            case ExposeKind.HTTPS:
+            case protocol.ExposeKind.HTTPS:
                 labels[f'traefik.http.routers.{router_name}.rule'] = f'Host(`{host}`)'
                 labels[f'traefik.http.routers.{router_name}.entrypoints'] = config.TRAEFIK_HTTPS_ENTRYPOINT
                 labels[f'traefik.http.routers.{router_name}.tls'] = 'true'
                 labels[f'traefik.http.routers.{router_name}.service'] = router_name
-                labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = str(expose.container_port)
+                labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = str(expose.pod_port)
 
                 if not has_http_expose:
                     redirect_router_name = f'{router_name}-redirect'
@@ -171,22 +178,7 @@ def _add_expose_labels(
                     )
 
 
-def _get_endpoints(challenge: Challenge, host: str | None) -> list[Instance.Endpoint] | None:
-    return (
-        [
-            Instance.Endpoint(
-                kind=expose.kind,
-                host=host,
-                port=expose_kind_to_port(expose.kind),
-            )
-            for expose in challenge.expose
-        ]
-        if host
-        else None
-    )
-
-
-async def _cleanup_containers(containers: list[tuple[str, DockerContainer]]) -> None:
+async def cleanup_containers(containers: list[tuple[str, DockerContainer]]) -> None:
     if not containers:
         return
 
@@ -199,7 +191,7 @@ async def _cleanup_containers(containers: list[tuple[str, DockerContainer]]) -> 
     await asyncio.gather(*delete_coroutines)
 
 
-async def _cleanup_networks(names: list[str]) -> None:
+async def cleanup_networks(names: list[str]) -> None:
     if not names:
         return
 
@@ -232,23 +224,23 @@ async def _cleanup_networks(names: list[str]) -> None:
     await asyncio.gather(*delete_coroutines)
 
 
-async def start_instance(challenge_name: str, team_id: str) -> Instance:
-    challenge = get_challenge(challenge_name)
-    async with instance_lock(challenge_name, team_id) as acquired:
+async def start_instance(form: protocol.RCTFCreateInstanceForm) -> protocol.RCTFInstanceDetails:
+    async with instance_lock(form.challenge_integration_id, form.team_id) as acquired:
         if not acquired:
             raise NOT_ACQUIRED_ERROR
 
-        if await is_running(challenge_name, team_id):
+        if await is_running(form.challenge_integration_id, form.team_id):
             raise HTTPException(status_code=400, detail='Instance is already running')
 
-        started_at = timestamp()
-        expires_at = started_at + challenge.timeout
+        exposed_kinds = ''.join(k.kind for k in form.expose)
+        started_at = timestamp_milliseconds()
+        expires_at = started_at + form.timeout_milliseconds
 
         instance_id = uuid.uuid4().hex[:12]
-        host = f'{challenge.name}-{instance_id}.{config.INSTANCES_HOST}'
+        host = f'{form.challenge_integration_id}-{instance_id}.{config.INSTANCES_HOST}'
 
-        svc_net = f'{config.PREFIX}-svc-{challenge_name}-{team_id}-{instance_id}'
-        eg_net = f'{config.PREFIX}-eg-{challenge_name}-{team_id}-{instance_id}'
+        svc_net = f'{config.PREFIX}-svc-{form.challenge_integration_id}-{form.team_id}-{instance_id}'
+        eg_net = f'{config.PREFIX}-eg-{form.challenge_integration_id}-{form.team_id}-{instance_id}'
 
         created_containers: list[tuple[str, DockerContainer]] = []
         networks_created: list[str] = []
@@ -257,30 +249,31 @@ async def start_instance(challenge_name: str, team_id: str) -> Instance:
             await _ensure_network(svc_net, internal=True, expires_at=expires_at)
             networks_created.append(svc_net)
 
-            if any(c.egress for c in challenge.containers):
+            if any(c.egress for c in form.pods):
                 await _ensure_network(eg_net, internal=False, expires_at=expires_at)
                 networks_created.append(eg_net)
 
-            for container in challenge.containers:
+            for container in form.pods:
                 try:
                     await get_docker().images.get(container.image)
                 except DockerError:
                     await get_docker().images.pull(container.image)
 
-                labels: dict[str, str] = {
+                labels: dict[str, str | list[str]] = {
                     ContainerLabels.MANAGED_BY: config.DOCKER_MANAGER_NAME,
-                    ContainerLabels.CHALLENGE: challenge_name,
-                    ContainerLabels.TEAM_ID: team_id,
+                    ContainerLabels.CHALLENGE: form.challenge_integration_id,
+                    ContainerLabels.TEAM_ID: form.team_id,
                     ContainerLabels.TARGET_HOSTNAME: host,
                     ContainerLabels.STARTED_AT: str(started_at),
                     ContainerLabels.EXPIRES_AT: str(expires_at),
                     ContainerLabels.INSTANCE_ID: instance_id,
+                    ContainerLabels.EXPOSED_KINDS: exposed_kinds,
                 }
 
-                if challenge.expose:
+                if form.expose:
                     labels['traefik.enable'] = 'true'
                     labels['traefik.docker.network'] = svc_net
-                _add_expose_labels(host, labels, challenge, container, team_id, instance_id)
+                _add_expose_labels(host, labels, form, container, instance_id)
 
                 # Setup networking
                 endpoints_config: dict[str, dict] = {
@@ -289,8 +282,8 @@ async def start_instance(challenge_name: str, team_id: str) -> Instance:
                 if container.egress:
                     endpoints_config[eg_net] = {}
 
-                container_name = f'{config.PREFIX}-{challenge_name}-{team_id}-{container.name}'
-                logger.info(f'Spinning up container {container_name=} {challenge_name=} {team_id=}')
+                container_name = f'{config.PREFIX}-{form.challenge_integration_id}-{form.team_id}-{container.name}'
+                logger.info(f'Spinning up container {container_name=} {form.challenge_integration_id=} {form.team_id=}')
                 created_container = await get_docker().containers.create(
                     config={
                         'Hostname': container.name,
@@ -303,10 +296,10 @@ async def start_instance(challenge_name: str, team_id: str) -> Instance:
                             },
                             'ReadOnlyRootfs': container.security.read_only_fs,
                             'Tmpfs': {'/tmp': 'noexec,nosuid,nodev'} if container.security.read_only_fs else {},  # noqa: S108
-                            'SecurityOpt': container.security.security_opt,
+                            'SecurityOpt': container.security.docker_security_opt,
                             'Memory': container.limits.memory_bytes,
                             'MemorySwap': container.limits.memory_bytes,
-                            'NanoCpus': container.limits.nano_cpus,
+                            'NanoCpus': container.limits.cpus_nano,
                             'PidsLimit': container.limits.pids_limit,
                             'CapAdd': container.security.cap_add,
                             'CapDrop': container.security.cap_drop,
@@ -329,24 +322,25 @@ async def start_instance(challenge_name: str, team_id: str) -> Instance:
             start_tasks = [container.start() for _, container in created_containers]
             await asyncio.gather(*start_tasks)
         except Exception as err:
-            await _cleanup_containers(created_containers)
-            await _cleanup_networks(networks_created)
+            await cleanup_containers(created_containers)
+            await cleanup_networks(networks_created)
 
             if isinstance(err, HTTPException):
                 raise
 
-            logger.opt(exception=err).error(f'Failed to start instance: {challenge_name=} {team_id=}')
+            logger.opt(exception=err).error(
+                f'Failed to start instance: {form.challenge_integration_id=} {form.team_id=}'
+            )
             raise HTTPException(status_code=500, detail='Failed to start instance') from err
 
-        return Instance(
-            status=InstanceStatus.STARTING,
-            timeout=challenge.timeout,
-            endpoints=_get_endpoints(challenge, host),
-            remaining_time=expires_at - timestamp(),
+        return protocol.RCTFInstanceDetails(
+            status=protocol.InstanceStatus.STARTING,
+            time_left_milliseconds=expires_at - timestamp_milliseconds(),
+            endpoints=_get_endpoints_for(exposed_kinds, host),
         )
 
 
-async def stop_instance(challenge_name: str, team_id: str) -> Instance:
+async def stop_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstanceDetails:
     async with instance_lock(challenge_name, team_id) as acquired:
         if not acquired:
             raise NOT_ACQUIRED_ERROR
@@ -399,18 +393,18 @@ async def stop_instance(challenge_name: str, team_id: str) -> Instance:
         await asyncio.gather(*net_disconnect_tasks, return_exceptions=True)
         await asyncio.gather(*net_remove_tasks, return_exceptions=True)
         logger.info(f'Removed {len(networks_to_remove)} networks.')
-        return Instance(
-            status=InstanceStatus.STOPPED,
-            timeout=get_challenge(challenge_name).timeout,
+        return protocol.RCTFInstanceDetails(
+            status=protocol.InstanceStatus.STOPPED,
             endpoints=None,
-            remaining_time=None,
+            time_left_milliseconds=None,
         )
 
 
-async def get_instance(challenge_name: str, team_id: str) -> Instance:
+async def get_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstanceDetails:
     containers = await get_containers(challenge_name, team_id, limit=1)
 
-    status = InstanceStatus.STOPPED
+    status = protocol.InstanceStatus.STOPPED
+    exposed_kinds: list[str] | None = None
     expires_at: int | None = None
     host: str | None = None
     if containers:
@@ -420,88 +414,11 @@ async def get_instance(challenge_name: str, team_id: str) -> Instance:
 
         expires_at = int(labels[ContainerLabels.EXPIRES_AT])
         host = labels[ContainerLabels.TARGET_HOSTNAME]
-        status = InstanceStatus.RUNNING if state == 'running' else InstanceStatus.STARTING
+        status = protocol.InstanceStatus.RUNNING if state == 'running' else protocol.InstanceStatus.STARTING
+        exposed_kinds = labels[ContainerLabels.EXPOSED_KINDS]
 
-    challenge = get_challenge(challenge_name)
-    return Instance(
+    return protocol.RCTFInstanceDetails(
         status=status,
-        timeout=challenge.timeout,
-        endpoints=_get_endpoints(challenge, host),
-        remaining_time=max(0, expires_at - timestamp()) if expires_at else None,
+        endpoints=_get_endpoints_for(exposed_kinds, host) if exposed_kinds and host else None,
+        time_left_milliseconds=max(0, expires_at - timestamp_milliseconds()) if expires_at else None,
     )
-
-
-async def _prune_instances(docker: Docker, now: int) -> None:
-    # TODO(es3n1n): Is there a way how to query containers by label value comparison?
-    containers = await docker.containers.list(
-        all=True,
-        filters={
-            'label': [
-                f'{ContainerLabels.MANAGED_BY}={config.DOCKER_MANAGER_NAME}',
-            ],
-        },
-    )
-
-    for container in containers:
-        try:
-            details = await container.show()
-        except DockerError:
-            # Got deleted already
-            continue
-        labels = details['Config']['Labels']
-
-        expires_at = int(labels[ContainerLabels.EXPIRES_AT])
-        if expires_at > now:
-            continue
-
-        challenge = labels[ContainerLabels.CHALLENGE]
-        team_id = labels[ContainerLabels.TEAM_ID]
-        logger.info(f'Prunner stopping expired container {container.id=} {challenge=} {team_id=} {expires_at=} {now=}')
-
-        try:
-            await stop_instance(challenge, team_id)
-        except HTTPException as err:
-            logger.opt(exception=err).warning(
-                f'Prunner failed to stop expired container {container.id=} via stop_instance, will try again'
-            )
-        except DockerError as err:
-            logger.opt(exception=err).warning(f'Prunner failed to remove expired container {container.id=}')
-
-
-async def _prune_networks(docker: Docker, now: int) -> None:
-    # TODO(es3n1n): Is there a way how to query containers by label value comparison?
-    networks = await docker.networks.list(
-        filters={
-            'label': [
-                f'{ContainerLabels.MANAGED_BY}={config.DOCKER_MANAGER_NAME}',
-            ],
-        }
-    )
-
-    names_to_prune: list[str] = []
-    for network in networks:
-        # NOTE(es3n1n): Going for a private method as I dont want to do the inspect request 2 times / network
-        details = await docker._query_json(f'networks/{network["Id"]}', method='GET')  # noqa: SLF001
-        labels = details['Labels']
-
-        expires_at = int(labels[ContainerLabels.EXPIRES_AT])
-        if expires_at > now:
-            continue
-
-        logger.info(f'Prunning expired network {network["Name"]=} {expires_at=} {now=}')
-        names_to_prune.append(network['Name'])
-
-    await _cleanup_networks(names_to_prune)
-
-
-async def instance_prunner() -> None:
-    docker = get_docker()
-    while True:
-        now = timestamp()
-        logger.info('Running instance prunner')
-        try:
-            await _prune_instances(docker, now)
-            await _prune_networks(docker, now)
-        except Exception as e:  # noqa: BLE001
-            logger.opt(exception=e).error('Encountered an error while prunning')
-        await sleep(config.PRUNNER_INTERVAL_SECONDS)

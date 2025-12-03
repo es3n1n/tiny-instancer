@@ -10,12 +10,9 @@ dependencies = [
     "aiodocker",
     "fastapi>=0.119.1",
     "filelock>=3.20.0",
-    "httpx>=0.28.1",
-    "jinja2>=3.1.6",
     "loguru>=0.7.3",
-    "orjson>=3.11.3",
+    "orjson>=3.11.4",
     "pydantic-settings>=2.11.0",
-    "pyyaml>=6.0.3",
     "redis[hiredis]>=6.4.0",
     "uvicorn>=0.38.0",
     "uvloop>=0.21.0; sys_platform != 'win32'",
@@ -23,9 +20,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "mypy>=1.18.2",
+    "mypy>=1.19.0",
     "pytest>=8.4.2",
-    "ruff>=0.14.1",
+    "ruff>=0.14.7",
     "types-pyyaml>=6.0.12.20250915",
 ]
 

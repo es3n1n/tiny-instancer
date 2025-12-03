@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
 from instancer.core import instances
-from instancer.core.auth import AuthSession
-from instancer.util.hcaptcha import HCaptchaForm
+from instancer.protocol import types
 
 
 router = APIRouter(
@@ -11,25 +10,19 @@ router = APIRouter(
 )
 
 
-@router.get('/{challenge_name}')
-async def get_instance(
-    challenge_name: str,
-    session: AuthSession,
-) -> instances.Instance:
-    return await instances.get_instance(challenge_name, session.team_id)
+@router.post('/')
+async def get_instance(form: types.RCTFGetInstanceForm) -> types.RCTFInstanceDetails:
+    form.check_token()
+    return await instances.get_instance(form.challenge_integration_id, form.team_id)
 
 
-@router.put('/{challenge_name}')
-async def start_instance(
-    request: Request, challenge_name: str, session: AuthSession, form: HCaptchaForm
-) -> instances.Instance:
-    await form.validate_captcha(request)
-    return await instances.start_instance(challenge_name, session.team_id)
+@router.put('/')
+async def start_instance(form: types.RCTFCreateInstanceForm) -> types.RCTFInstanceDetails:
+    form.check_token()
+    return await instances.start_instance(form)
 
 
-@router.delete('/{challenge_name}')
-async def stop_instance(
-    request: Request, challenge_name: str, session: AuthSession, form: HCaptchaForm
-) -> instances.Instance:
-    await form.validate_captcha(request)
-    return await instances.stop_instance(challenge_name, session.team_id)
+@router.delete('/')
+async def stop_instance(form: types.RCTFStopInstanceForm) -> types.RCTFInstanceDetails:
+    form.check_token()
+    return await instances.stop_instance(form.challenge_integration_id, form.team_id)

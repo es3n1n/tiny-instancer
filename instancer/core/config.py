@@ -1,15 +1,7 @@
-from enum import StrEnum
-from pathlib import Path
-
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from instancer.util.fs import ROOT_DIR
-
-
-class AuthProvider(StrEnum):
-    LOCAL = 'local'
-    RCTF = 'rctf'
 
 
 class Settings(BaseSettings):
@@ -26,8 +18,7 @@ class Settings(BaseSettings):
     WEB_WORKERS: int = 2
     USE_PROXY_HEADERS: bool = False
 
-    AUTH_PROVIDER: AuthProvider = AuthProvider.LOCAL
-    AUTH_PROVIDER_ARGS: dict[str, str] = {}
+    AUTH_TOKEN: SecretStr
 
     CHALLENGES_YAML_PATH: str = str(ROOT_DIR / 'challenges.yaml')
     TEMPLATES_PATH: str = str(ROOT_DIR / 'templates')
@@ -56,41 +47,9 @@ class Settings(BaseSettings):
 
     PRUNNER_INTERVAL_SECONDS: int = 3
 
-    HCAPTCHA_SECRET: SecretStr | None = None
-    HCAPTCHA_SITE_KEY: str | None = None
-
-    AUTH_CACHE_LIFE_TIME: int = 3600 * 24 * 14
-    AUTH_PLATFORM_URL: str | None = None
-
     @property
     def cache_connection_url(self) -> str:
         return f'redis://:{self.REDIS_PASSWORD.get_secret_value()}@{self.REDIS_HOST}:{self.REDIS_PORT_NUMBER}'
-
-    @property
-    def is_hcaptcha_config_set(self) -> bool:
-        return bool(self.HCAPTCHA_SECRET) and bool(self.HCAPTCHA_SITE_KEY)
-
-    @field_validator('AUTH_PLATFORM_URL')
-    @classmethod
-    def validate_url(cls, v: str | None) -> str | None:
-        if not v:
-            return None
-
-        return v.rstrip('/')
-
-    @field_validator('CHALLENGES_YAML_PATH', 'TEMPLATES_PATH')
-    @classmethod
-    def validate_challenges_yaml_path(cls, v: str) -> str:
-        path = Path(v)
-        if path.exists():
-            return str(path.absolute())
-
-        path = ROOT_DIR / v
-        if path.exists():
-            return str(path.absolute())
-
-        msg = f'Path "{v}" is not valid.'
-        raise ValueError(msg)
 
 
 config = Settings()  # type: ignore[call-arg]

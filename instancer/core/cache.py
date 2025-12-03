@@ -34,15 +34,3 @@ async def instance_lock(challenge: str, team_id: str) -> AsyncGenerator[bool]:
         yield acquired
     finally:
         await lock.release()
-
-
-async def cache_token(token: str, team_id: str) -> None:
-    await redis.set(
-        f'{config.PREFIX}:tokens:{token}',
-        team_id,
-        ex=config.AUTH_CACHE_LIFE_TIME,
-    )
-
-
-async def try_get_team_id_by_token(token: str) -> str | None:
-    return await redis.get(f'{config.PREFIX}:tokens:{token}')
