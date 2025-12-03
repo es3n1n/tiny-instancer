@@ -74,8 +74,8 @@ class RCTFGetInstanceForm(BaseRCTFRequest):
     challenge_integration_id: str = Field(validation_alias='challengeIntegrationId')
 
 
-class RCTFStopInstanceForm(BaseRCTFRequest):
-    kind: Literal['instancerStopInstanceForm'] = 'instancerStopInstanceForm'
+class RCTFDeleteInstanceForm(BaseRCTFRequest):
+    kind: Literal['instancerDeleteInstanceForm'] = 'instancerDeleteInstanceForm'
     team_id: str = Field(validation_alias='teamId')
     challenge_integration_id: str = Field(validation_alias='challengeIntegrationId')
 

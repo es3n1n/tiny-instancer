@@ -23,6 +23,6 @@ async def start_instance(form: types.RCTFCreateInstanceForm) -> types.RCTFInstan
 
 
 @router.delete('/')
-async def stop_instance(form: types.RCTFStopInstanceForm) -> types.RCTFInstanceDetails:
+async def stop_instance(form: types.RCTFDeleteInstanceForm) -> types.RCTFInstanceDetails:
     form.check_token()
     return await instances.stop_instance(form.challenge_integration_id, form.team_id)
