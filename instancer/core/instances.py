@@ -404,7 +404,7 @@ async def get_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstan
     containers = await get_containers(challenge_name, team_id, limit=1)
 
     status = protocol.InstanceStatus.STOPPED
-    exposed_kinds: list[str] | None = None
+    exposed_kinds: str | None = None
     expires_at: int | None = None
     host: str | None = None
     if containers:
