@@ -1,5 +1,7 @@
 # tiny-instancer
 
+v2 branch is very different from v1, all of this is outdated :upside_down:
+
 A tiny CTF challenge instancer with docker backend I wrote in one night.
 
 ## Why

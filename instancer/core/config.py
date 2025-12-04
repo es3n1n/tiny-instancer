@@ -20,9 +20,6 @@ class Settings(BaseSettings):
 
     AUTH_TOKEN: SecretStr
 
-    CHALLENGES_YAML_PATH: str = str(ROOT_DIR / 'challenges.yaml')
-    TEMPLATES_PATH: str = str(ROOT_DIR / 'templates')
-
     TRAEFIK_CONTAINER_NAME: str = 'ti-traefik'
     TRAEFIK_HTTP_ENTRYPOINT: str = 'web'
     TRAEFIK_HTTP_PORT: int = 80
