@@ -199,7 +199,7 @@ def _get_container_status(detail: dict) -> protocol.InstanceStatus:
 def _get_highest_status(statuses: list[protocol.InstanceStatus]) -> protocol.InstanceStatus:
     if protocol.InstanceStatus.ERRORED in statuses:
         return protocol.InstanceStatus.ERRORED
-    elif protocol.InstanceStatus.STARTING in statuses:
+    if protocol.InstanceStatus.STARTING in statuses:
         return protocol.InstanceStatus.STARTING
     return protocol.InstanceStatus.RUNNING
 
