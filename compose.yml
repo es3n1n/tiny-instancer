@@ -1,14 +1,18 @@
 services:
   traefik:
-    image: traefik:v3.6.2
+    image: traefik:v3
     restart: unless-stopped
-    container_name: ti-traefik
+    container_name: ${TRAEFIK_CONTAINER_NAME:-ti-traefik}
     command:
       - --configFile=/etc/traefik/traefik.yml
+    env_file:
+      - .env
+    networks:
+      - tiny-network
     ports:
-      - "443:443"
-      - "80:80"
-      - "1337:1337"
+      - "${TRAEFIK_HTTPS_PORT:-443}:${TRAEFIK_HTTPS_PORT:-443}"
+      - "${TRAEFIK_HTTP_PORT:-80}:${TRAEFIK_HTTP_PORT:-80}"
+      - "${TRAEFIK_TCP_PORT:-1337}:${TRAEFIK_TCP_PORT:-1337}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./conf/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -41,21 +45,21 @@ services:
     env_file:
       - .env
     volumes:
-      - ./challenges.yaml:/app/challenges.yaml:ro
       - /var/run/docker.sock:/var/run/docker.sock
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=tiny-network"
       # https
       - "traefik.http.routers.ti-instance.rule=Host(`${INSTANCES_HOST}`)"
-      - "traefik.http.routers.ti-instance.entrypoints=websecure"
+      - "traefik.http.routers.ti-instance.entrypoints=${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.ti-instance.tls=true"
       - "traefik.http.routers.ti-instance.service=ti-instance"
       # service
       - "traefik.http.services.ti-instance.loadbalancer.server.port=${BIND_PORT}"
       # redirect from http
       - "traefik.http.routers.ti-instance-redirect.rule=Host(`${INSTANCES_HOST}`)"
-      - "traefik.http.routers.ti-instance-redirect.entrypoints=web"
-      - "traefik.http.routers.ti-instance-redirect.middlewares=${TRAEFIK_PERMANENT_REDIRECT_MIDDLEWARE_NAME}"
+      - "traefik.http.routers.ti-instance-redirect.entrypoints=${TRAEFIK_HTTP_ENTRYPOINT:-web}"
+      - "traefik.http.routers.ti-instance-redirect.middlewares=${TRAEFIK_PERMANENT_REDIRECT_MIDDLEWARE_NAME:-permanent-https-redirect@file}"
 
 networks:
   tiny-network:
