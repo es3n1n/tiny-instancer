@@ -143,25 +143,6 @@ async def _stop_and_delete_containers(containers: list[DockerContainer], challen
     logger.info(f'Removed {len(containers)} containers.')
 
 
-async def _cleanup_instance_networks(docker: Docker, networks: set[str]) -> None:
-    net_remove_tasks = []
-    net_disconnect_tasks = []
-
-    for net_name in networks:
-        network = await docker.networks.get(net_name)
-        details = await network.show()
-        for conn in (details['Containers'] or {}).values():
-            logger.info(f'Disconnecting container {conn["Name"]} from network {net_name}')
-            net_disconnect_tasks.append(network.disconnect({'Container': conn['Name'], 'Force': True}))
-
-        logger.info(f'Removing network {net_name}')
-        net_remove_tasks.append(network.delete())
-
-    await asyncio.gather(*net_disconnect_tasks, return_exceptions=True)
-    await asyncio.gather(*net_remove_tasks, return_exceptions=True)
-    logger.info(f'Removed {len(networks)} networks.')
-
-
 async def stop_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstanceDetails:
     async with instance_lock(challenge_name, team_id) as acquired:
         if not acquired:
@@ -182,10 +163,10 @@ async def stop_instance(challenge_name: str, team_id: str) -> protocol.RCTFInsta
 
         networks_to_remove, volumes_to_remove = await _collect_instance_resources(instance_containers)
         await _stop_and_delete_containers(instance_containers, challenge_name, team_id)
-        await _cleanup_instance_networks(docker, networks_to_remove)
-
-        await cleanup_volumes(docker, list(volumes_to_remove))
-        logger.info(f'Removed {len(volumes_to_remove)} volumes.')
+        await asyncio.gather(
+            cleanup_networks(docker, list(networks_to_remove)),
+            cleanup_volumes(docker, list(volumes_to_remove)),
+        )
 
         if instance_id:
             await delete_instance_expiration(instance_id)
@@ -215,6 +196,14 @@ def _get_container_status(detail: dict) -> protocol.InstanceStatus:
     return protocol.InstanceStatus.RUNNING
 
 
+def _get_highest_status(statuses: list[protocol.InstanceStatus]) -> protocol.InstanceStatus:
+    if protocol.InstanceStatus.ERRORED in statuses:
+        return protocol.InstanceStatus.ERRORED
+    elif protocol.InstanceStatus.STARTING in statuses:
+        return protocol.InstanceStatus.STARTING
+    return protocol.InstanceStatus.RUNNING
+
+
 async def get_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstanceDetails:
     docker = get_docker()
     containers = await get_containers(docker, challenge_name, team_id)
@@ -226,19 +215,16 @@ async def get_instance(challenge_name: str, team_id: str) -> protocol.RCTFInstan
     if containers:
         details = await asyncio.gather(*[container.show() for container in containers])
 
+        first_labels = details[0]['Config']['Labels']
+        expires_at = await get_effective_expiration(first_labels)
+
         statuses: list[protocol.InstanceStatus] = []
         for detail in details:
             labels = detail['Config']['Labels']
-            expires_at = await get_effective_expiration(labels)
             statuses.append(_get_container_status(detail))
             endpoints.extend(extract_exposes(labels))
 
-        if protocol.InstanceStatus.ERRORED in statuses:
-            status = protocol.InstanceStatus.ERRORED
-        elif protocol.InstanceStatus.STARTING in statuses:
-            status = protocol.InstanceStatus.STARTING
-        else:
-            status = protocol.InstanceStatus.RUNNING
+        status = _get_highest_status(statuses)
 
     return protocol.RCTFInstanceDetails(
         status=status,
@@ -262,28 +248,22 @@ async def renew_instance(form: protocol.RCTFRenewInstanceForm) -> protocol.RCTFI
 
         details = await asyncio.gather(*[container.show() for container in containers])
 
+        first_labels = details[0]['Config']['Labels']
+        instance_id: str | None = first_labels.get(ContainerLabels.INSTANCE_ID)
+        if not instance_id:
+            raise HTTPException(status_code=500, detail='Instance ID not found in container labels')
+
         endpoints: list[protocol.RCTFInstanceDetails.Endpoint] = []
         statuses: list[protocol.InstanceStatus] = []
-        instance_id: str | None = None
 
         for detail in details:
             labels = detail['Config']['Labels']
             statuses.append(_get_container_status(detail))
             endpoints.extend(extract_exposes(labels))
-            instance_id = labels.get(ContainerLabels.INSTANCE_ID)
-
-        if not instance_id:
-            raise HTTPException(status_code=500, detail='Instance ID not found in container labels')
 
         await set_instance_expiration(instance_id, new_expires_at, now)
 
-        if protocol.InstanceStatus.ERRORED in statuses:
-            status = protocol.InstanceStatus.ERRORED
-        elif protocol.InstanceStatus.STARTING in statuses:
-            status = protocol.InstanceStatus.STARTING
-        else:
-            status = protocol.InstanceStatus.RUNNING
-
+        status = _get_highest_status(statuses)
         logger.info(
             f'Renewed instance {form.challenge_integration_id=} {form.team_id=} '
             f'{instance_id=} new_expires_at={new_expires_at}'

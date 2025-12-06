@@ -20,14 +20,19 @@ def expose_ports(
     instance_id: str,
     routing_network: str | None,
 ) -> tuple[list[str], list[protocol.RCTFInstanceDetails.Endpoint]]:
-    to_expose = exposes.get(svc_name)
+    to_expose = exposes.get(svc_name, [])
 
-    labels[ContainerLabels.EXPOSED_KINDS] = SEPARATOR.join(k.kind for k in (to_expose or []))
+    # We don't support raw tcp expose due to SNI routing
+    for exp in to_expose:
+        if exp.kind != protocol.ExposeKind.TCP:
+            continue
+        exp.kind = protocol.ExposeKind.TCP_SSL
+
+    labels[ContainerLabels.EXPOSED_KINDS] = SEPARATOR.join(k.kind for k in to_expose)
     if not to_expose or not routing_network:
         labels[ContainerLabels.EXPOSED_HOSTNAMES] = ''
         return [], []
 
-    has_http_expose = any(any(exp.kind == protocol.ExposeKind.HTTP for exp in k) for k in exposes.values())
     hosts: list[str] = []
     exposed: list[protocol.RCTFInstanceDetails.Endpoint] = []
 
@@ -48,11 +53,13 @@ def expose_ports(
         )
 
         match expose.kind:
-            case protocol.ExposeKind.TCP | protocol.ExposeKind.TCP_SSL:
+            # TCP is not supported
+
+            case protocol.ExposeKind.TCP_SSL:
                 labels[f'traefik.tcp.routers.{router_name}.rule'] = f'HostSNI(`{host}`)'
                 labels[f'traefik.tcp.routers.{router_name}.entrypoints'] = config.TRAEFIK_TCP_ENTRYPOINT
                 labels[f'traefik.tcp.routers.{router_name}.service'] = router_name
-                labels[f'traefik.tcp.routers.{router_name}.tls.passthrough'] = 'true'
+                labels[f'traefik.tcp.routers.{router_name}.tls'] = 'true'
                 labels[f'traefik.tcp.services.{router_name}.loadbalancer.server.port'] = str(expose.container_port)
 
             case protocol.ExposeKind.HTTP:
@@ -68,6 +75,10 @@ def expose_ports(
                 labels[f'traefik.http.routers.{router_name}.service'] = router_name
                 labels[f'traefik.http.services.{router_name}.loadbalancer.server.port'] = str(expose.container_port)
 
+                has_http_expose = any(
+                    any(exp.kind == protocol.ExposeKind.HTTP and exp.host_prefix == expose.host_prefix for exp in k)
+                    for k in exposes.values()
+                )
                 if not has_http_expose:
                     redirect_router_name = f'{router_name}-redirect'
                     labels[f'traefik.http.routers.{redirect_router_name}.rule'] = f'Host(`{host}`)'
@@ -81,9 +92,13 @@ def expose_ports(
 
 
 def extract_exposes(labels: dict[str, str]) -> list[protocol.RCTFInstanceDetails.Endpoint]:
-    exposed_kinds = labels.get(ContainerLabels.EXPOSED_KINDS, '').split(SEPARATOR)
-    exposed_hosts = labels.get(ContainerLabels.EXPOSED_HOSTNAMES, '').split(SEPARATOR)
+    raw_exposed_kinds = labels.get(ContainerLabels.EXPOSED_KINDS, '')
+    raw_exposed_hosts = labels.get(ContainerLabels.EXPOSED_HOSTNAMES, '')
+    if not raw_exposed_kinds or not raw_exposed_hosts:
+        return []
 
+    exposed_kinds = raw_exposed_kinds.split(SEPARATOR)
+    exposed_hosts = raw_exposed_hosts.split(SEPARATOR)
     if len(exposed_hosts) != len(exposed_kinds):
         logger.warning(f'Exposed hosts and kinds count mismatch: {len(exposed_hosts)=} {len(exposed_kinds)=}')
         return []
