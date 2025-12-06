@@ -8,6 +8,7 @@ services:
     ports:
       - "443:443"
       - "80:80"
+      - "1337:1337"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./conf/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -18,6 +19,8 @@ services:
     image: bitnami/redis:latest
     restart: unless-stopped
     container_name: ti-cache
+    networks:
+      - tiny-network
     env_file:
       - .env
     volumes:
@@ -28,6 +31,10 @@ services:
     image: tiny-instancer:latest
     restart: unless-stopped
     container_name: tiny-instancer
+    networks:
+      tiny-network:
+        aliases:
+          - tiny-instancer
     depends_on:
       - traefik
       - cache
@@ -49,3 +56,7 @@ services:
       - "traefik.http.routers.ti-instance-redirect.rule=Host(`${INSTANCES_HOST}`)"
       - "traefik.http.routers.ti-instance-redirect.entrypoints=web"
       - "traefik.http.routers.ti-instance-redirect.middlewares=${TRAEFIK_PERMANENT_REDIRECT_MIDDLEWARE_NAME}"
+
+networks:
+  tiny-network:
+    name: tiny-network
