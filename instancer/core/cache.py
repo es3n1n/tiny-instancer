@@ -47,7 +47,7 @@ async def get_instance_expiration(instance_id: str) -> int | None:
 
 
 async def set_instance_expiration(instance_id: str, expires_at_ms: int, now_ms: int) -> None:
-    ttl_seconds = max(1, ((expires_at_ms - now_ms) // 1000) + 3600)
+    ttl_seconds = max(1, ((expires_at_ms - now_ms) // 1000) + 120)
     await redis.set(_expiration_key(instance_id), str(expires_at_ms), ex=ttl_seconds)
 
 
