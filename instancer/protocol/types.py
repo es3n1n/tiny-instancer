@@ -55,27 +55,27 @@ class Service(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
     command: str | None = None
     entrypoint: str | None = None
-    working_dir: str | None = Field(default=None, validation_alias='workingDir')
+    working_dir: str | None = Field(default=None)
     user: str | None = None
     networks: list[str] = Field(default_factory=list)
-    network_mode: str | None = Field(default=None, validation_alias='networkMode')
+    network_mode: str | None = Field(default=None)
     dns: list[str] = Field(default_factory=list)
-    dns_opt: list[str] = Field(default_factory=list, validation_alias='dnsOpt')
-    dns_search: list[str] = Field(default_factory=list, validation_alias='dnsSearch')
-    extra_hosts: list[str] = Field(default_factory=list, validation_alias='extraHosts')
+    dns_opt: list[str] = Field(default_factory=list)
+    dns_search: list[str] = Field(default_factory=list)
+    extra_hosts: list[str] = Field(default_factory=list)
     expose: list[str] = Field(default_factory=list)
     volumes: list[str] = Field(default_factory=list)
     tmpfs: dict[str, str] = Field(default_factory=dict)
-    shm_size: str | None = Field(default=None, validation_alias='shmSize')
+    shm_size: str | None = Field(default=None)
     healthcheck: Healthcheck | None = None
-    read_only: bool = Field(default=True, validation_alias='readOnly')
+    read_only: bool = Field(default=True)
     privileged: bool = False
-    security_opt: list[str] = Field(default_factory=lambda: ['no-new-privileges'], validation_alias='securityOpt')
-    cap_add: list[str] = Field(default_factory=list, validation_alias='capAdd')
-    cap_drop: list[str] = Field(default_factory=lambda: ['ALL'], validation_alias='capDrop')
-    mem_limit: str = Field(default='6m', validation_alias='memLimit')
+    security_opt: list[str] = Field(default_factory=lambda: ['no-new-privileges'])
+    cap_add: list[str] = Field(default_factory=list)
+    cap_drop: list[str] = Field(default_factory=lambda: ['ALL'])
+    mem_limit: str = Field(default='6m')
     cpus: float = 1.0
-    pids_limit: int = Field(default=64, validation_alias='pidsLimit')
+    pids_limit: int = Field(default=64)
     ulimits: dict[str, Ulimit] = Field(default_factory=lambda: {'nofile': Ulimit(soft=1024, hard=1024)})
     sysctls: dict[str, str] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
@@ -91,12 +91,12 @@ class NetworkDriver(StrEnum):
 class Network(BaseModel):
     driver: NetworkDriver = NetworkDriver.BRIDGE
     internal: bool = True
-    driver_opts: dict[str, str] = Field(default_factory=dict, validation_alias='driverOpts')
+    driver_opts: dict[str, str] = Field(default_factory=dict)
 
 
 class Volume(BaseModel):
     driver: str = 'local'
-    driver_opts: dict[str, str] = Field(default_factory=dict, validation_alias='driverOpts')
+    driver_opts: dict[str, str] = Field(default_factory=dict)
 
 
 class InstancerConfig(BaseModel):
