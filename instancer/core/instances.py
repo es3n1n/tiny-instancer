@@ -182,6 +182,9 @@ def _get_container_status(detail: dict) -> protocol.InstanceStatus:
     state = detail['State']
     container_status = state.get('Status', '')
 
+    if container_status in {'removing', 'paused', 'exited', 'dead'}:
+        return protocol.InstanceStatus.ERRORED
+
     if container_status != 'running':
         return protocol.InstanceStatus.STARTING
 
