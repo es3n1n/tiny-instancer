@@ -132,4 +132,4 @@ async def cleanup_containers(containers: list[DockerContainer]) -> None:
     if not containers:
         return
 
-    await asyncio.gather(*[container.delete(force=True) for container in containers])
+    await asyncio.gather(*[container.delete(force=True) for container in containers], return_exceptions=True)
