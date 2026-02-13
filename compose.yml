@@ -46,20 +46,8 @@ services:
       - .env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=tiny-network"
-      # https
-      - "traefik.http.routers.ti-instance.rule=Host(`${INSTANCES_HOST}`)"
-      - "traefik.http.routers.ti-instance.entrypoints=${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.ti-instance.tls=true"
-      - "traefik.http.routers.ti-instance.service=ti-instance"
-      # service
-      - "traefik.http.services.ti-instance.loadbalancer.server.port=${BIND_PORT}"
-      # redirect from http
-      - "traefik.http.routers.ti-instance-redirect.rule=Host(`${INSTANCES_HOST}`)"
-      - "traefik.http.routers.ti-instance-redirect.entrypoints=${TRAEFIK_HTTP_ENTRYPOINT:-web}"
-      - "traefik.http.routers.ti-instance-redirect.middlewares=${TRAEFIK_PERMANENT_REDIRECT_MIDDLEWARE_NAME:-permanent-https-redirect@file}"
+    ports:
+      - "127.0.0.1:12237:1337"
 
 networks:
   tiny-network:
